@@ -1,0 +1,81 @@
+name: Batch — Procesar cola completa
+on:
+  workflow_dispatch:
+    inputs:
+      max_videos:
+        description: 'Máximo de videos a procesar en esta ejecución'
+        required: false
+        default: '20'
+        type: string
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build matrix from queue
+        id: set-matrix
+        run: |
+          python -c "
+          import json
+          from shorts_generator.state import load_state
+          state = load_state()
+          pending = [q['url'] for q in state['queue'] if q['status'] == 'pending']
+          max_v = int('${{ inputs.max_videos }}' or 20)
+          selected = pending[:max_v]
+          print(f'Matrix: {len(selected)} videos to process')
+          with open('matrix.json', 'w') as f:
+              json.dump({'url': selected}, f)
+          "
+          echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
+
+    process-matrix:
+      needs: process
+      runs-on: ubuntu-latest
+      strategy:
+        matrix: ${{ fromJSON(needs.process.outputs.matrix) }}
+        max-parallel: 10
+      steps:
+        - uses: actions/checkout@v4
+        - uses: actions/setup-python@v5
+          with:
+            python-version: '3.11'
+        - name: Install ffmpeg
+          run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        - name: Install pip deps
+          run: |
+            pip install -r requirements-actions.txt
+            pip install opencv-contrib-python-headless
+        - name: Process
+          env:
+            GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+            GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+            YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+            LLM_PROVIDER: gemini
+            LLM_PROVIDER_CASCADE: gemini,groq
+            LOCAL_TRANSCRIBE_PROVIDER: whisper
+            LOCAL_WHISPER_MODEL: base
+          run: |
+            python editor.py "${{ matrix.url }}" --count 50 --output clips --json result.json
+            python -c "
+            from shorts_generator.state import mark_done, mark_failed
+            import json
+            try:
+                with open('result.json') as f:
+                    r = json.load(f)
+                mark_done('${{ matrix.url }}', clip_count=len(r.get('shorts', [])))
+                print(f'Done: {len(r.get(\"shorts\", []))} clips')
+            except Exception as e:
+                mark_failed('${{ matrix.url }}', str(e))
+                print(f'Failed: {e}')
+            "
+        - uses: actions/upload-artifact@v4
+          with:
+            name: clips-${{ strategy.job-index }}
+            path: clips/
+            retention-days: 30
