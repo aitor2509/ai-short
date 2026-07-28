@@ -1,0 +1,64 @@
+name: Editor — Generar Shorts
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: 'URLs de YouTube (una por línea)'
+        required: true
+        type: string
+      count:
+        description: 'Shorts por video'
+        required: false
+        default: '50'
+        type: string
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Cada URL se procesa en paralelo (GitHub permite hasta 20 concurrentes)
+        url: ${{ fromJSON(format('[{0}]', inputs.urls | split('\n') | map('tojson') | join(','))) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Install pip deps
+        run: |
+          pip install -r requirements-actions.txt
+          pip install opencv-contrib-python-headless
+
+      - name: Process video
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          LLM_PROVIDER: gemini
+          LLM_PROVIDER_CASCADE: gemini,groq
+          LOCAL_TRANSCRIBE_PROVIDER: whisper
+          LOCAL_WHISPER_MODEL: base
+        run: |
+          python editor.py "${{ matrix.url }}" \
+            --count ${{ inputs.count || 50 }} \
+            --output clips \
+            --json result.json
+
+      - name: Upload clips as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: clips-${{ strategy.job-index }}
+          path: clips/
+          retention-days: 30
+
+      - name: Upload result JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ strategy.job-index }}.json
+          path: result.json
+          retention-days: 30
