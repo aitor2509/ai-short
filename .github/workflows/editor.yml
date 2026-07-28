@@ -11,29 +11,40 @@ on:
         required: false
         default: '50'
         type: string
-
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Build matrix from urls input
+        id: set-matrix
+        env:
+          URLS_INPUT: ${{ inputs.urls }}
+        run: |
+          MATRIX=$(python3 -c "
+          import json, os
+          urls = [u.strip() for u in os.environ['URLS_INPUT'].splitlines() if u.strip()]
+          print(json.dumps({'url': urls}))
+          ")
+          echo "Matrix: $MATRIX"
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
   process:
+    needs: prepare
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        # Cada URL se procesa en paralelo (GitHub permite hasta 20 concurrentes)
-        url: ${{ fromJSON(format('[{0}]', inputs.urls | split('\n') | map('tojson') | join(','))) }}
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-
       - name: Install pip deps
         run: |
           pip install -r requirements-actions.txt
           pip install opencv-contrib-python-headless
-
       - name: Process video
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -48,14 +59,12 @@ jobs:
             --count ${{ inputs.count || 50 }} \
             --output clips \
             --json result.json
-
       - name: Upload clips as artifacts
         uses: actions/upload-artifact@v4
         with:
           name: clips-${{ strategy.job-index }}
           path: clips/
           retention-days: 30
-
       - name: Upload result JSON
         uses: actions/upload-artifact@v4
         with:
