@@ -1,0 +1,9 @@
+# GitHub Actions dependencies (runs on ubuntu-latest)
+yt-dlp
+faster-whisper
+numpy
+opencv-contrib-python-headless
+python-dotenv
+google-genai
+openai
+PyYAML
