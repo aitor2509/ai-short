@@ -1,0 +1,49 @@
+name: Discover — Buscar videos para procesar
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # cada 6 horas
+  workflow_dispatch:
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          pip install yt-dlp python-dotenv
+
+      - name: Scan playlists and find trending videos
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: |
+          python -c "
+          import json, sys
+          from shorts_generator.trend_finder import find_best_video_url, is_playlist_url
+          from shorts_generator.state import load_state, save_state, add_to_queue
+
+          state = load_state()
+          # Limpiar videos ya procesados (status=done) del queue
+          state['queue'] = [q for q in state['queue'] if q['status'] != 'done']
+
+          # Por cada cuenta, buscar nuevo contenido
+          for account in state.get('accounts', []):
+              for source in account.get('sources', []):
+                  try:
+                      best = find_best_video_url(source, max_videos_to_scan=30)
+                      if best:
+                          # Checkear si ya está en la cola
+                          existing = any(q['url'] == best for q in state['queue'])
+                          if not existing:
+                              add_to_queue(best, account=account['name'], niche=account.get('niche',''), state=state)
+                              print(f'  Añadido: {best} para {account[\"name\"]}')
+                  except Exception as e:
+                      print(f'  Error con {source}: {e}')
+
+          print(f'Queue: {len(state[\"queue\"])} pendientes')
+          "
